@@ -1,5 +1,4 @@
-import imageio, os, torch, warnings, torchvision, argparse, json
-from peft import LoraConfig, inject_adapter_in_model
+import os, torch, warnings, torchvision, argparse, json
 from PIL import Image
 import pandas as pd
 from tqdm import tqdm
@@ -7,7 +6,6 @@ from omegaconf import OmegaConf
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
 
-from utils.train_utils import ModelConfig, load_state_dict
 from pipelines.wan_video import WanVideoPipeline
 from dataset.text_video_audio_dataset import TextAudioVideoDataset
 
@@ -30,17 +28,6 @@ class DiffusionTrainingModule(torch.nn.Module):
         trainable_param_names = set([named_param[0] for named_param in trainable_param_names])
         return trainable_param_names
     
-    def add_lora_to_model(self, model, target_modules, lora_rank, lora_alpha=None, upcast_dtype=None):
-        if lora_alpha is None:
-            lora_alpha = lora_rank
-        lora_config = LoraConfig(r=lora_rank, lora_alpha=lora_alpha, target_modules=target_modules)
-        model = inject_adapter_in_model(lora_config, model)
-        if upcast_dtype is not None:
-            for param in model.parameters():
-                if param.requires_grad:
-                    param.data = param.to(upcast_dtype)
-        return model
-
     def mapping_lora_state_dict(self, state_dict):
         new_state_dict = {}
         for key, value in state_dict.items():
@@ -85,13 +72,18 @@ class WanTrainingModule(DiffusionTrainingModule):
         
         # Training mode
         self.pipe.switch_to_train()
+
+        num_train_params = 0
+        for p in self.trainable_modules():
+            num_train_params += p.numel()
+        print(f"number of trainable paramters: {num_train_params}")
         
         # Store other configs
         self.max_timestep_boundary = max_timestep_boundary
         self.min_timestep_boundary = min_timestep_boundary
     
-    def forward(self, data, inputs=None):
-        if inputs is None: inputs = self.forward_preprocess(data)
+    def forward(self, inputs):
+        inputs = self.pipe.preprocess_inputs(inputs)
         models = {"model": self.pipe.model}
         losses = self.pipe.training_loss(**models, **inputs)
         return losses

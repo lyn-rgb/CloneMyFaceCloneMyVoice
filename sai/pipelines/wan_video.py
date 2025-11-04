@@ -119,7 +119,7 @@ class WanVideoPipeline(torch.nn.Module):
         # set trainable params
         self.model.train()
         self.scheduler.set_timesteps(1000, training=True)
-        self.freeze_except([] if self.config.get("trainable_models", None) is None else self.config.get("trainable_models", None).split(","))
+        self.freeze_except(self.model, [] if self.config.get("trainable_models", None) is None else self.config.get("trainable_models", None).split(","))
 
     def offload_to_cpu(self, model):
         model = model.cpu()
@@ -132,14 +132,15 @@ class WanVideoPipeline(torch.nn.Module):
     def get_vram(self):
         return torch.cuda.mem_get_info(self.device)[1] / (1024**3)
 
-    def freeze_except(self, model_names):
-        for name, model in self.named_children():
+    def freeze_except(self, model, model_names):
+        for name, sub_model in model.named_children():
             if name in model_names:
-                model.train()
-                model.requires_grad_(True)
+                sub_model.train()
+                sub_model.requires_grad_(True)
             else:
-                model.eval()
-                model.requires_grad_(False)
+                sub_model.eval()
+                sub_model.requires_grad_(False)
+                self.freeze_except(sub_model, model_names)
     
     @torch.no_grad()
     def preprocess_inputs(self, inputs: dict) -> dict:

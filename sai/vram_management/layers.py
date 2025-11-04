@@ -1,5 +1,5 @@
 import torch, copy
-from ..models.utils import init_weights_on_device
+from modules.utils import init_weights_on_device
 
 
 def cast_to(weight, dtype, device):
