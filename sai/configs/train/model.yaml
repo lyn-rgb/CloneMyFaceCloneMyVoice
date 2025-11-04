@@ -10,10 +10,3 @@ cpu_offload: False
 use_sp: False
 sp_size: 1
 trainable_models: "q_loras,k_loras,v_loras,o_loras"
-# data
-
-# optimizer
-
-# train
-
-# log & eval

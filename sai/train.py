@@ -9,8 +9,7 @@ from accelerate.utils import DistributedDataParallelKwargs
 
 from utils.train_utils import ModelConfig, load_state_dict
 from pipelines.wan_video import WanVideoPipeline
-from datasets.unified_dataset import UnifiedDataset
-
+from dataset.text_video_audio_dataset import TextAudioVideoDataset
 
 
 class DiffusionTrainingModule(torch.nn.Module):
@@ -209,16 +208,12 @@ def launch_data_process_task(
 
 def wan_parser():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
-    parser.add_argument("--model_config_path", type=str, default="./configs/train/train.yaml", help="model config file path.")
-
-    parser.add_argument("--dataset_base_path", type=str, default="", required=True, help="Base path of the dataset.")
-    parser.add_argument("--dataset_metadata_path", type=str, default=None, help="Path to the metadata file of the dataset.")
-    parser.add_argument("--max_pixels", type=int, default=1280*720, help="Maximum number of pixels per frame, used for dynamic resolution..")
+    parser.add_argument("--data_root", type=str, default="", required=True, help="Base path of the dataset.")
+    parser.add_argument("--meta_dir", type=str, default=None, required=True, help="Path to the metadata file of the dataset.")
+    parser.add_argument("--model_config_path", type=str, default=None, required=True, help="Path to the metadata file of the dataset.")
     parser.add_argument("--height", type=int, default=480, help="Height of images or videos. Leave `height` and `width` empty to enable dynamic resolution.")
     parser.add_argument("--width", type=int, default=864, help="Width of images or videos. Leave `height` and `width` empty to enable dynamic resolution.")
     parser.add_argument("--num_frames", type=int, default=81, help="Number of frames per video. Frames are sampled from the video prefix.")
-    parser.add_argument("--data_file_keys", type=str, default="image,video", help="Data file keys in the metadata. Comma-separated.")
-    parser.add_argument("--dataset_repeat", type=int, default=1, help="Number of times to repeat the dataset per epoch.")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate.")
     parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs.")
     parser.add_argument("--output_path", type=str, default="./models", help="Output save path.")
@@ -240,27 +235,16 @@ if __name__ == "__main__":
 
     config = OmegaConf.load(args.model_config_path)
 
-
-    dataset = UnifiedDataset(
-        base_path=args.dataset_base_path,
-        metadata_path=args.dataset_metadata_path,
-        repeat=args.dataset_repeat,
-        data_file_keys=args.data_file_keys.split(","),
-        main_data_operator=UnifiedDataset.default_video_operator(
-            base_path=args.dataset_base_path,
-            max_pixels=args.max_pixels,
-            height=args.height,
-            width=args.width,
-            height_division_factor=16,
-            width_division_factor=16,
-            num_frames=args.num_frames,
-            time_division_factor=4,
-            time_division_remainder=1,
-        ),
-        special_operator_map={
-            "animate_face_video": ToAbsolutePath(args.dataset_base_path) >> LoadVideo(args.num_frames, 4, 1, frame_processor=ImageCropAndResize(512, 512, None, 16, 16)),
-            "input_audio": ToAbsolutePath(args.dataset_base_path) >> LoadAudio(sr=16000),
-        }
+    dataset = TextAudioVideoDataset(
+        data_root        = args.data_root,
+        meta_dir         = args.meta_dir,
+        audio_sr         = 16000,
+        ref_audio_frames = 48,
+        height           = args.height,
+        width            = args.width,
+        height_div       = 16,
+        width_div        = 16,
+        num_frames       = args.num_frames
     )
     model = WanTrainingModule(
         config=config,
