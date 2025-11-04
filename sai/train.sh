@@ -1,4 +1,4 @@
-accelerate launch train.py \
+accelerate launch --config_file configs/train/accelerate_config_zero2.yaml train.py \
   --data_root data/data \
   --meta_dir data/meta \
   --model_config_path configs/train/model.yaml \
