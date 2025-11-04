@@ -8,6 +8,7 @@ import cv2
 import pandas as pd
 import librosa
 import random
+from copy import deepcopy
 
 import torch  # NOTE, import torch before decord to avoid bug occurs in decord
 import decord
@@ -21,12 +22,13 @@ from . import video_transforms
 class TextAudioVideoDataset(Dataset):
     """ NOTE, only supports batch size = 1 yet.
     """
-    def __init__(self, data_root, meta_dir, audio_sr=16000, normalize_audio=True, target_fps=24, height=480, width=864, height_div=32, width_div=32, num_frames=81):
+    def __init__(self, data_root, meta_dir, audio_sr=16000, ref_audio_frames=48, normalize_audio=True, target_fps=24, height=480, width=864, height_div=32, width_div=32, num_frames=81):
         super().__init__()
         self.data_root = data_root
         self.data = self._load_data(meta_dir)
 
         self.audio_sr = audio_sr
+        self.ref_audio_frames = ref_audio_frames
         self.normalize_audio = normalize_audio
         self.target_fps = target_fps
         self.num_pixels = height * width
@@ -68,7 +70,7 @@ class TextAudioVideoDataset(Dataset):
         # random a frame for ip_image
         ref_id = np.random.randint(0, video_length)
         ref_id = np.array([ref_id], dtype=np.int32)
-        ref_image = video_reader.get_batch(ref_id).premute(0, 3, 1, 2)  # 1,C,H,W
+        ref_image = video_reader.get_batch(ref_id).permute(0, 3, 1, 2)  # 1,C,H,W
         # TODO, crop ref_frame from bbox
         if bbox is not None:
             pass
@@ -110,29 +112,58 @@ class TextAudioVideoDataset(Dataset):
         )
         ref_image = image_transform(ref_image)
 
-        return video, ref_image, source_start_idx, frame_index_delta
+        return video, ref_image, source_start_idx, source_fps
 
-    def load_audio(self, audio_path):
+    def load_audio(self, audio_path, source_start_idx, source_fps):
         wave_data, sample_rate = librosa.load(audio_path, sr=self.audio_sr, mono=True)
         if self.normalize_audio:
             wave_data = wave_data / (np.max(np.abs(wave_data)) * 0.95 + 1e-6)  # align with mmaudio/data/extraction.wav_dataset.py line 89
-        return torch.from_numpy(wave_data) 
+            
+        audio_unit = self.audio_sr / self.target_fps                             # 16000 / 24 = 666.67
+        
+        # get reference audio
+        audio_length = len(wave_data)
+        ref_audio_length = int(self.ref_audio_frames * audio_unit)
+        ref_audio_start_idx = np.random.randint(0, audio_length - ref_audio_length)
+        ref_audio = deepcopy(wave_data[ref_audio_start_idx: ref_audio_start_idx + ref_audio_length])
+        ref_audio = torch.from_numpy(ref_audio) 
+        
+        # sample audio
+        audio_length = int(self.num_frames * self.audio_sr / self.target_fps)    # 81 * 16000 / 24 = 54000 or 121 * 16000 / 24 = 80666.67
+        audio_start_idx = int(source_start_idx * self.audio_sr / source_fps)
+        wave_data = deepcopy(wave_data[audio_start_idx: audio_start_idx + audio_length])
+        
+        return torch.from_numpy(wave_data), ref_audio
 
     def sample_data(self, sample):
         video_path = sample["video_path"]
         audio_path = sample["audio_path"]
         bbox = sample["bbox"]
 
-        audio = self.load_audio(audio_path)
-        video_reader, frame_index_delta, video_length = self.load_video(video_path)
-
+        video, ref_image, source_start_idx, source_fps = self.load_video(video_path, bbox)
+        audio, ref_audio = self.load_audio(audio_path, source_start_idx, source_fps)
         
-
-
-        pass
+        return video, ref_image, audio, ref_audio
 
     def __getitem__(self, index):
-        pass
+        video, ref_image, audio, ref_audio, caption = None, None, None, None, None
+        while True:
+            try:
+                sample = self.data[index]
+                video, ref_image, audio, ref_audio = self.sample_data(sample)
+                caption = sample["caption"]
+                break
+            except Exception as e:
+                print(f"[Error] dataset, error <{e}> occurred when loading data from {sample['video_path']} and {sample['audio_path']}")
+                break
+            
+        return {
+            "video": video,
+            "audio": audio,
+            "prompts": caption,
+            "ip_image": ref_image,
+            "ip_audio": ref_audio
+        }
 
     def __len__(self):
         return len(self.data)
